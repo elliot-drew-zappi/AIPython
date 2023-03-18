@@ -4,6 +4,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.table import Table
 import re
+import inspect
 
 import openai
 openai.api_key = os.getenv("OPENAI_USER_KEY")
@@ -22,28 +23,71 @@ from langchain.prompts.chat import (
 from langchain.utilities import WikipediaAPIWrapper
 from langchain.agents import initialize_agent
 
+from langchain.embeddings.openai import OpenAIEmbeddings
+from langchain.text_splitter import CharacterTextSplitter
+from langchain.vectorstores import Chroma
+from langchain.document_loaders import DirectoryLoader
+
 c = Console()
 
+# chroma vectorstore
+def setup_index(index_path="./chromadb", doc_path="./vector_store/"):
+    embedding = OpenAIEmbeddings()
+    if os.path.exists(index_path):
+        vectordb = Chroma(persist_directory=index_path, embedding_function=embedding)
+        with open("./chroma_seen.json", "r") as fin:
+            chromaseen = json.loads(fin.read())
+        loader = DirectoryLoader(doc_path)
+        documents = loader.load()
+        new_documents = []
+        for doc in documents:
+            doc_name = documents[0].metadata['source']
+            if doc_name not in chromaseen:
+                new_documents.append(doc)
+                chromaseen.append(doc_name)
+        if len(new_documents) > 0:
+            text_splitter = CharacterTextSplitter(chunk_size=500, chunk_overlap=25)
+            docs = text_splitter.split_documents(new_documents)
+            vectordb.add_documents(docs)
+            with open("./chroma_seen.json", "w") as fout:
+                fout.write(json.dumps(chromaseen))
+    else:
+        if not os.path.exists(doc_path):
+            os.makedirs(doc_path)
+        loader = DirectoryLoader(doc_path)
+        documents = loader.load()
+        text_splitter = CharacterTextSplitter(chunk_size=500, chunk_overlap=25)
+        docs = text_splitter.split_documents(documents)
+        vectordb = Chroma.from_documents(docs, embedding, persist_directory=index_path)
+        vectordb.persist()
+        with open("./chroma_seen.json", "w") as fout:
+            fout.write(json.dumps(os.listdir(doc_path)))
+    return(vectordb)
+
 def create_wiki_agent():
-    memory = ConversationBufferWindowMemory(memory_key="chat_history", return_messages=True, k=3)
-    llm=ChatOpenAI(model_name='gpt-3.5-turbo',temperature=0.)
+    memory = ConversationBufferWindowMemory(memory_key="chat_history", return_messages=True, k=5)
+    llm = ChatOpenAI(
+        model_name='gpt-3.5-turbo',
+        temperature=0,
+        max_tokens= 1000
+        )
     wiki = WikipediaAPIWrapper()
     tools = [
         Tool(
             name = "Wikipedia Search",
             func=wiki.run,
-            description="useful for when you need to answer questions about general knowledge (history, science, maths, geography, culture, technology etc). the input to this should be a single search term. Your answers should be in Markdown."
+            description="you should use this tool only when the user starts their message with 'wiki:'. the input to this should be a single search term. You should start your answer with the phrase, 'Using wikipedia search: '"
         ),
     ]
-    agent_chain = initialize_agent(
+    agent_wiki = initialize_agent(
         tools, 
         llm, 
         agent="chat-conversational-react-description", 
-        verbose=False,
+        verbose=True,
         memory=memory,
         )
 
-    return agent_chain
+    return agent_wiki
 
 def create_chat():
     template="You are a helpful assistant that is a genius at programming. You respond with markdown formatted text. If you create a markdown fenced code block for a specific programming language, you must indicate what syntax highlighting to use e.g. ```python" 
@@ -115,23 +159,74 @@ def rich_print_md(text):
         else:
             c.print(Markdown(chunk))
 
-
 class AIpython:
     def __init__(self):
         self.conversation = []
         self.wiki_agent = create_wiki_agent()
         self.code_chat = create_chat()
+        self.vector_db = setup_index()
+    
+    def clear(self):
+        self.wiki_agent.memory.clear()
+        self.code_chat.memory.clear()
 
     def ask_wiki(self, question):
-        r = self.wiki_agent.run(input = question)
-        #json.dumps(r, indent=2)
-        c.print(Markdown(r))
+        with c.status("[bold green]Answering Question...", spinner='aesthetic', speed=0.8) as status:
+            m = self.wiki_agent.run(input = question)
+            self.conversation.append({'question':question, 'answer':m})
+            c.print(Markdown(m))
+    
+    def ask_vector(self, question):
+        with c.status("[bold green]Answering Question...", spinner='aesthetic', speed=0.8) as status:
+            m = self.vector_agent.run(input = question)
+            self.conversation.append({'question':question, 'answer':m})
+            c.print(Markdown(m))
 
-    def ask(self, question):
+    def ask_normal(self, question):
         with c.status("[bold green]Answering Question...", spinner='aesthetic', speed=0.8) as status:
             m = self.code_chat.predict(input = question)
             self.conversation.append({'question':question, 'answer':m})
             rich_print_md(m)
-        return m
+        
+    def ask(self, question, func = None):
+        if func:
+            try:
+                func_source = inspect.getsource(func)
+                question += f"\n```\n{func_source}\n```"
+            except Exception as e:
+                print(f"There was an error: {e}")
+                return
+
+        if question.startswith("wiki:"):
+            try:
+                self.ask_wiki(question)
+            except Exception as e:
+                print(f"There was an error: {e}")
+        elif question.startswith("vecdb:"):
+            try:
+                docs = self.vector_db.similarity_search(question[5:])
+                # now feed these into normal as context.
+                new_input = f"Context:\n{docs[0].page_content}\n{docs[1].page_content}\n{docs[2].page_content}\n\nQuestion:{question[5:]}"
+                self.ask_normal(new_input)
+            except Exception as e:
+                print(f"There was an error: {e}")
+        else:
+            try:
+                self.ask_normal(question)
+            except Exception as e:
+                print(f"There was an error: {e}")
+    
+    def classify(self, query, labels, multi = True):
+        self.clear() # fresh, uncontaminated convo
+        if multi:
+            amount = "one or more"
+        else:
+            amount = "one"
+        label_text = ", ".join(labels)
+        prompt = f"Instruction: Classify the Query as {amount} of {label_text}.Only return the label, no other text.\nQuery: '{query}'"
+        l = self.ask_normal(prompt)
+        return l
+
+
 
     

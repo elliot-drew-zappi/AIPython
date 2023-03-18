@@ -7,6 +7,9 @@ setup(
     install_requires=[
         "openai",
         "langchain",
+        "chromadb",
+        "wikipedia",
+        "unstructured",
     ],
     classifiers=[
         "Development Status :: 3 - Alpha",
