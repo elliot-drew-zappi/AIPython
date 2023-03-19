@@ -28,6 +28,8 @@ from langchain.text_splitter import CharacterTextSplitter
 from langchain.vectorstores import Chroma
 from langchain.document_loaders import DirectoryLoader
 
+import traceback
+
 c = Console()
 
 # chroma vectorstore
@@ -131,6 +133,19 @@ def parse_markdown_chunks(markdown_text):
 
     return chunks
 
+def ai_exception(AI):
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            try:
+                return func(*args, **kwargs)
+            except Exception as e:
+                tb = traceback.format_exc()
+                function_code = inspect.getsource(func)
+                formatted_string = f"Here is a function, and the error I get when i run it - How do I fix it?:\n{function_code}\n\nTrackback:\n\n{tb}"
+                AI.ask(formatted_string)
+        return wrapper
+    return decorator
+
 def markdown_table_to_rich_table(table_chunk):
     lines = table_chunk.split("\n")
     header_line = lines[0]
@@ -174,6 +189,11 @@ class AIpython:
         with c.status("[bold green]Answering Question...", spinner='aesthetic', speed=0.8) as status:
             m = self.wiki_agent.run(input = question)
             self.conversation.append({'question':question, 'answer':m})
+            # we now add the memory to the code chat so it can use it as context.
+            self.code_chat.memory.chat_memory.add_user_message(self.wiki_agent.memory.chat_memory.messages[0].content)
+            self.code_chat.memory.chat_memory.add_AI_message(self.wiki_agent.memory.chat_memory.messages[1].content)
+            # then clear the memory of the wiki agent
+            self.wiki_agent.memory.clear()
             c.print(Markdown(m))
     
     def ask_vector(self, question):
