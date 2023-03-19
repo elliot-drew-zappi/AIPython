@@ -86,6 +86,8 @@ meant to refer to any specific tangible object or substance.
 '''
 ```
 
+Turns out "hero's blend" is not coffee.
+
 ### Passing in functions
 
 A lot of the time I'm using AI to help me fix my garbage code - so I want to be able to pass in a function without any fuss.
