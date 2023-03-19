@@ -3,7 +3,12 @@ from setuptools import setup, find_packages
 setup(
     name="aipython",
     version="0.1.0",
-    packages=find_packages(include=['aipython']),
+    url="https://github.com/elliot-drew-zappi/AIPython",
+    author="Elliot Drew",
+    author_email="elliot.drew@zappistore.com",
+    description="ChatGPT in the python console/notebooks with LangChain and some rich pretty formatting.",
+    long_description=open('README.md').read(),
+    packages=find_packages(),
     install_requires=[
         "openai",
         "langchain",
