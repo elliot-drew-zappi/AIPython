@@ -30,41 +30,45 @@ from langchain.document_loaders import DirectoryLoader
 
 import traceback
 
-c = Console()
-
 # chroma vectorstore
-def setup_index(index_path="./chromadb", doc_path="./vector_store/"):
-    embedding = OpenAIEmbeddings()
-    if os.path.exists(index_path):
-        vectordb = Chroma(persist_directory=index_path, embedding_function=embedding)
-        with open("./chroma_seen.json", "r") as fin:
-            chromaseen = json.loads(fin.read())
-        loader = DirectoryLoader(doc_path)
-        documents = loader.load()
-        new_documents = []
-        for doc in documents:
-            doc_name = documents[0].metadata['source']
-            if doc_name not in chromaseen:
-                new_documents.append(doc)
-                chromaseen.append(doc_name)
-        if len(new_documents) > 0:
+def setup_index():
+    if os.getenv("AIPYTHON_DATA"):
+        index_path=os.path.join(os.getenv("AIPYTHON_DATA"), "chromadb")
+        doc_path=os.path.join(os.getenv("AIPYTHON_DATA"), "vector_store/")
+        embedding = OpenAIEmbeddings()
+        if os.path.exists(index_path):
+            vectordb = Chroma(persist_directory=index_path, embedding_function=embedding)
+            with open(os.path.join(os.getenv("AIPYTHON_DATA"), "chroma_seen.json"), "r") as fin:
+                chromaseen = json.loads(fin.read())
+            loader = DirectoryLoader(doc_path)
+            documents = loader.load()
+            new_documents = []
+            for doc in documents:
+                doc_name = documents[0].metadata['source']
+                if doc_name not in chromaseen:
+                    new_documents.append(doc)
+                    chromaseen.append(doc_name)
+            if len(new_documents) > 0:
+                text_splitter = CharacterTextSplitter(chunk_size=500, chunk_overlap=25)
+                docs = text_splitter.split_documents(new_documents)
+                vectordb.add_documents(docs)
+                with open(os.path.join(os.getenv("AIPYTHON_DATA"), "chroma_seen.json"), "w") as fout:
+                    fout.write(json.dumps(chromaseen))
+        else:
+            if not os.path.exists(doc_path):
+                os.makedirs(doc_path)
+            loader = DirectoryLoader(doc_path)
+            documents = loader.load()
             text_splitter = CharacterTextSplitter(chunk_size=500, chunk_overlap=25)
-            docs = text_splitter.split_documents(new_documents)
-            vectordb.add_documents(docs)
-            with open("./chroma_seen.json", "w") as fout:
-                fout.write(json.dumps(chromaseen))
+            docs = text_splitter.split_documents(documents)
+            vectordb = Chroma.from_documents(docs, embedding, persist_directory=index_path)
+            vectordb.persist()
+            with open(os.path.join(os.getenv("AIPYTHON_DATA"), "chroma_seen.json"), "w") as fout:
+                fout.write(json.dumps(os.listdir(doc_path)))
+        return(vectordb)
     else:
-        if not os.path.exists(doc_path):
-            os.makedirs(doc_path)
-        loader = DirectoryLoader(doc_path)
-        documents = loader.load()
-        text_splitter = CharacterTextSplitter(chunk_size=500, chunk_overlap=25)
-        docs = text_splitter.split_documents(documents)
-        vectordb = Chroma.from_documents(docs, embedding, persist_directory=index_path)
-        vectordb.persist()
-        with open("./chroma_seen.json", "w") as fout:
-            fout.write(json.dumps(os.listdir(doc_path)))
-    return(vectordb)
+        rich_print_md("**Not using VectorDB** - set AIPYTHON_DATA environmental variable to the path you want Chroma DB and vector files to be stored.")
+        return(None)
 
 def create_wiki_agent():
     memory = ConversationBufferWindowMemory(memory_key="chat_history", return_messages=True, k=5)
@@ -133,19 +137,6 @@ def parse_markdown_chunks(markdown_text):
 
     return chunks
 
-def ai_exception(AI):
-    def decorator(func):
-        def wrapper(*args, **kwargs):
-            try:
-                return func(*args, **kwargs)
-            except Exception as e:
-                tb = traceback.format_exc()
-                function_code = inspect.getsource(func)
-                formatted_string = f"Here is a function, and the error I get when i run it - How do I fix it?:\n{function_code}\n\nTrackback:\n\n{tb}"
-                AI.ask(formatted_string)
-        return wrapper
-    return decorator
-
 def markdown_table_to_rich_table(table_chunk):
     lines = table_chunk.split("\n")
     header_line = lines[0]
@@ -166,6 +157,7 @@ def markdown_table_to_rich_table(table_chunk):
     return table
 
 def rich_print_md(text):
+    c = Console()
     chunks = parse_markdown_chunks(text)
     for chunk in chunks:
         if chunk.startswith("|"):
@@ -180,33 +172,28 @@ class AIpython:
         self.wiki_agent = create_wiki_agent()
         self.code_chat = create_chat()
         self.vector_db = setup_index()
+        self.c = Console()
     
     def clear(self):
         self.wiki_agent.memory.clear()
         self.code_chat.memory.clear()
 
     def ask_wiki(self, question):
-        with c.status("[bold green]Answering Question...", spinner='aesthetic', speed=0.8) as status:
+        with self.c.status("[bold green]Answering Question...", spinner='aesthetic', speed=0.8) as status:
             m = self.wiki_agent.run(input = question)
             self.conversation.append({'question':question, 'answer':m})
             # we now add the memory to the code chat so it can use it as context.
             self.code_chat.memory.chat_memory.add_user_message(self.wiki_agent.memory.chat_memory.messages[0].content)
-            self.code_chat.memory.chat_memory.add_AI_message(self.wiki_agent.memory.chat_memory.messages[1].content)
+            self.code_chat.memory.chat_memory.add_ai_message(self.wiki_agent.memory.chat_memory.messages[1].content)
             # then clear the memory of the wiki agent
             self.wiki_agent.memory.clear()
-            c.print(Markdown(m))
-    
-    def ask_vector(self, question):
-        with c.status("[bold green]Answering Question...", spinner='aesthetic', speed=0.8) as status:
-            m = self.vector_agent.run(input = question)
-            self.conversation.append({'question':question, 'answer':m})
-            c.print(Markdown(m))
+        rich_print_md(m)
 
     def ask_normal(self, question):
-        with c.status("[bold green]Answering Question...", spinner='aesthetic', speed=0.8) as status:
+        with self.c.status("[bold green]Answering Question...", spinner='aesthetic', speed=0.8) as status:
             m = self.code_chat.predict(input = question)
             self.conversation.append({'question':question, 'answer':m})
-            rich_print_md(m)
+        rich_print_md(m)
         
     def ask(self, question, func = None):
         if func:
@@ -223,13 +210,20 @@ class AIpython:
             except Exception as e:
                 print(f"There was an error: {e}")
         elif question.startswith("vecdb:"):
-            try:
-                docs = self.vector_db.similarity_search(question[5:])
-                # now feed these into normal as context.
-                new_input = f"Context:\n{docs[0].page_content}\n{docs[1].page_content}\n{docs[2].page_content}\n\nQuestion:{question[5:]}"
-                self.ask_normal(new_input)
-            except Exception as e:
-                print(f"There was an error: {e}")
+            if self.vector_db:
+                try:
+                    docs = self.vector_db.similarity_search(question[5:])
+                    # now feed these into normal as context.
+                    new_input = f"Context:\n{docs[0].page_content}\n{docs[1].page_content}\n{docs[2].page_content}\n\nQuestion:{question[5:]}"
+                    self.ask_normal(new_input)
+                except Exception as e:
+                    print(f"There was an error: {e}")
+            else:
+                try:
+                    rich_print_md("**Not using VectorDB** - set AIPYTHON_DATA environmental variable.")
+                    self.ask_normal(question)
+                except Exception as e:
+                    print(f"There was an error: {e}")
         else:
             try:
                 self.ask_normal(question)

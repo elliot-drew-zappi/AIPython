@@ -3,13 +3,15 @@ from setuptools import setup, find_packages
 setup(
     name="aipython",
     version="0.1.0",
-    packages=find_packages(),
+    packages=find_packages(include=['aipython']),
     install_requires=[
         "openai",
         "langchain",
         "chromadb",
         "wikipedia",
         "unstructured",
+        "rich",
+        "tenacity",
     ],
     classifiers=[
         "Development Status :: 3 - Alpha",
