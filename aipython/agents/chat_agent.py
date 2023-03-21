@@ -270,11 +270,11 @@ class AIpython:
             summaries = []
             for chunk in chunks:
                 q = f"{instruction}\n{chunk}"
-                summary = self.ask_normal(q)
+                summary = self.ask(q)
                 summaries.append(summary)
             # join up the summaries and pass in a list for chunking.
             chunks = chunk_strings(["\n".join(summaries)])
         q = f"{instruction}\n{chunks[0]}"
-        summary = self.ask_normal(q)
+        summary = self.ask(q)
         return(summary)
     
