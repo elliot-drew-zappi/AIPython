@@ -75,7 +75,7 @@ def create_wiki_agent():
     llm = ChatOpenAI(
         model_name='gpt-3.5-turbo',
         temperature=0,
-        max_tokens= 1000
+        max_tokens= 500
         )
     wiki = WikipediaAPIWrapper()
     tools = [
@@ -107,7 +107,7 @@ def create_chat():
     chat = ChatOpenAI(
         model_name='gpt-3.5-turbo',
         temperature=0,
-        max_tokens= 1000
+        max_tokens= 500
         )
     chat_memory = ConversationBufferWindowMemory(return_messages=True, k=5)
     chain = ConversationChain(llm=chat, prompt=chat_prompt, memory=chat_memory)
@@ -166,6 +166,13 @@ def rich_print_md(text):
         else:
             c.print(Markdown(chunk))
 
+def chunk_strings(s_list, chunksize = 3000):
+    chunks = []
+    for s in s_list:
+        for i in range(0, len(s), chunksize):
+            chunks.append(s[i:i+chunksize])
+    return chunks
+
 class AIpython:
     def __init__(self):
         self.conversation = []
@@ -178,7 +185,7 @@ class AIpython:
         self.wiki_agent.memory.clear()
         self.code_chat.memory.clear()
 
-    def ask_wiki(self, question):
+    def ask_wiki(self, question, plaintext):
         with self.c.status("[bold green]Answering Question...", spinner='aesthetic', speed=0.8) as status:
             m = self.wiki_agent.run(input = question)
             self.conversation.append({'question':question, 'answer':m})
@@ -187,15 +194,22 @@ class AIpython:
             self.code_chat.memory.chat_memory.add_ai_message(self.wiki_agent.memory.chat_memory.messages[1].content)
             # then clear the memory of the wiki agent
             self.wiki_agent.memory.clear()
-        rich_print_md(m)
+        if plaintext:
+            print(m)
+        else:
+            rich_print_md(m)
 
-    def ask_normal(self, question):
+    def ask_normal(self, question, plaintext):
         with self.c.status("[bold green]Answering Question...", spinner='aesthetic', speed=0.8) as status:
             m = self.code_chat.predict(input = question)
             self.conversation.append({'question':question, 'answer':m})
-        rich_print_md(m)
+        if plaintext:
+            print(m)
+        else:
+            rich_print_md(m)
         
-    def ask(self, question, func = None):
+    def ask(self, question, func = None, plaintext = False):
+        
         if func:
             try:
                 func_source = inspect.getsource(func)
@@ -206,7 +220,7 @@ class AIpython:
 
         if question.startswith("wiki:"):
             try:
-                self.ask_wiki(question)
+                self.ask_wiki(question, plaintext)
             except Exception as e:
                 print(f"There was an error: {e}")
         elif question.startswith("vecdb:"):
@@ -215,18 +229,18 @@ class AIpython:
                     docs = self.vector_db.similarity_search(question[5:])
                     # now feed these into normal as context.
                     new_input = f"Context:\n{docs[0].page_content}\n{docs[1].page_content}\n{docs[2].page_content}\n\nQuestion:{question[5:]}"
-                    self.ask_normal(new_input)
+                    self.ask_normal(new_input, plaintext)
                 except Exception as e:
                     print(f"There was an error: {e}")
             else:
                 try:
                     rich_print_md("**Not using VectorDB** - set AIPYTHON_DATA environmental variable.")
-                    self.ask_normal(question)
+                    self.ask_normal(question, plaintext)
                 except Exception as e:
                     print(f"There was an error: {e}")
         else:
             try:
-                self.ask_normal(question)
+                self.ask_normal(question, plaintext)
             except Exception as e:
                 print(f"There was an error: {e}")
     
@@ -238,9 +252,29 @@ class AIpython:
             amount = "one"
         label_text = ", ".join(labels)
         prompt = f"Instruction: Classify the Query as {amount} of {label_text}.Only return the label, no other text.\nQuery: '{query}'"
-        l = self.ask_normal(prompt)
+        l = self.ask_normal(prompt, True)
         return l
 
-
-
+    def summarize(self, docs, instruction = "Summarise the following, only answer with the summary:"):
+        """
+        Recursively sumarises any number of documents each of arbitrary length.
+        docs is a list of strings
+        instruction is a string
+        returns a string summary
+        """
+        
+        # first get chunks
+        chunks = chunk_strings(docs)
+        # now we need to start summarising and combining the chunks.
+        while len(chunks) > 1:
+            summaries = []
+            for chunk in chunks:
+                q = f"{instruction}\n{chunk}"
+                summary = self.ask_normal(q)
+                summaries.append(summary)
+            # join up the summaries and pass in a list for chunking.
+            chunks = chunk_strings(["\n".join(summaries)])
+        q = f"{instruction}\n{chunks[0]}"
+        summary = self.ask_normal(q)
+        return(summary)
     
