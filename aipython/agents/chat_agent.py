@@ -199,12 +199,14 @@ class AIpython:
         else:
             rich_print_md(m)
 
-    def ask_normal(self, question, plaintext):
+    def ask_normal(self, question, plaintext = False, to_print=True):
         with self.c.status("[bold green]Answering Question...", spinner='aesthetic', speed=0.8) as status:
             m = self.code_chat.predict(input = question)
             self.conversation.append({'question':question, 'answer':m})
         if plaintext:
-            print(m)
+            if to_print:
+                print(m)
+            return(m)
         else:
             rich_print_md(m)
         
@@ -266,17 +268,25 @@ class AIpython:
         # first get chunks
         chunks = chunk_strings(docs)
         # now we need to start summarising and combining the chunks.
+        iter_count = 1
+        
         while len(chunks) > 1:
             summaries = []
+            chunk_count = 1
             for chunk in chunks:
+                print(f"Iteration: {iter_count} - Chunk {chunk_count}")
                 q = f"{instruction}\n{chunk}"
                 self.clear()
-                summary = self.ask_normal(q, plaintext=True)
+                summary = self.ask_normal(q, plaintext=True, to_print=False)
                 summaries.append(summary)
+                chunk_count+=1
             # join up the summaries and pass in a list for chunking.
             chunks = chunk_strings(["\n".join(summaries)])
+            chunk_count+=1
         q = f"{instruction}\n{chunks[0]}"
         self.clear()
-        summary = self.ask_normal(q, plaintext=True)
+        summary = self.ask_normal(q, plaintext=True, to_print=False)
+        print("Final summary:\n")
+        print(summary)
         return(summary)
     
