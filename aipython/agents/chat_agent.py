@@ -27,8 +27,11 @@ from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.text_splitter import CharacterTextSplitter
 from langchain.vectorstores import Chroma
 from langchain.document_loaders import DirectoryLoader
+from langchain.docstore.document import Document
+from langchain.chains.summarize import load_summarize_chain
 
 import traceback
+import signal
 
 # chroma vectorstore
 def setup_index():
@@ -173,6 +176,24 @@ def chunk_strings(s_list, chunksize = 3000):
             chunks.append(s[i:i+chunksize])
     return chunks
 
+def timeout(seconds):
+    def process_timeout(func):
+        def handle_timeout(signum, frame):
+            raise TimeoutError("The function timed out")
+
+        def wrapper(*args, **kwargs):
+            signal.signal(signal.SIGALRM, handle_timeout)
+            signal.alarm(seconds)
+
+            try:
+                func(*args, **kwargs)
+            finally:
+                signal.alarm(0) # No need to time out!
+
+        return wrapper
+
+    return process_timeout
+
 class AIpython:
     def __init__(self):
         self.conversation = []
@@ -185,6 +206,7 @@ class AIpython:
         self.wiki_agent.memory.clear()
         self.code_chat.memory.clear()
 
+    @timeout(20)
     def ask_wiki(self, question, plaintext):
         with self.c.status("[bold green]Answering Question...", spinner='aesthetic', speed=0.8) as status:
             m = self.wiki_agent.run(input = question)
@@ -198,7 +220,8 @@ class AIpython:
             print(m)
         else:
             rich_print_md(m)
-
+    
+    @timeout(20)
     def ask_normal(self, question, plaintext = False, to_print=True):
         with self.c.status("[bold green]Answering Question...", spinner='aesthetic', speed=0.8) as status:
             m = self.code_chat.predict(input = question)
@@ -256,37 +279,40 @@ class AIpython:
         prompt = f"Instruction: Classify the Query as {amount} of {label_text}.Only return the label, no other text.\nQuery: '{query}'"
         l = self.ask_normal(prompt, True)
         return l
-
-    def summarize(self, docs, instruction = "Summarise the following, only answer with the summary:"):
-        """
-        Recursively sumarises any number of documents each of arbitrary length.
-        docs is a list of strings
-        instruction is a string
-        returns a string summary
-        """
-        
-        # first get chunks
-        chunks = chunk_strings(docs)
-        # now we need to start summarising and combining the chunks.
-        iter_count = 1
-        
-        while len(chunks) > 1:
-            summaries = []
-            chunk_count = 1
-            for chunk in chunks:
-                print(f"Iteration: {iter_count} - Chunk {chunk_count}")
-                q = f"{instruction}\n{chunk}"
-                self.clear()
-                summary = self.ask_normal(q, plaintext=True, to_print=False)
-                summaries.append(summary)
-                chunk_count+=1
-            # join up the summaries and pass in a list for chunking.
-            chunks = chunk_strings(["\n".join(summaries)])
-            chunk_count+=1
-        q = f"{instruction}\n{chunks[0]}"
+    
+    def classify_sbs(self, query, labels, multi = True):
+        self.clear() # fresh, uncontaminated convo
+        if multi:
+            amount = "one or more"
+        else:
+            amount = "one"
+        label_text = ", ".join(labels)
+        prompt = f'''Instruction: Classify the Query as {amount} of {label_text}. You should think step by step through your reasoning. Your final answer should be given in the following format: "FINAL ANSWER: <answer>". \nQuery: {query}'''
+        l = self.ask_normal(prompt, True)
+        return l
+    
+    def extract_sbs(self, query, labels):
+        self.clear() # fresh, uncontaminated convo
+        label_text = ", ".join(labels)
+        prompt = f'''Instruction: Extract from the text information pertaining to each of these topics: {label_text}. You should think step by step through your reasoning. Your final answer should be the extracted information as a JSON object with keys as topics, values as extracted data. \nQuery: {query}'''
+        l = self.ask_normal(prompt, True)
+        return l
+    
+    def extract_keyphrases(self, query):
         self.clear()
-        summary = self.ask_normal(q, plaintext=True, to_print=False)
-        print("Final summary:\n")
-        print(summary)
-        return(summary)
+        prompt = f"""Instruction: Extract the keywords and phrases from the query. Provide the data as a JSON formatted python list. \nQuery: {query}"""
+        l = self.ask_normal(prompt, True)
+        return l
+
+    def summarize(self, docs):
+        llm = ChatOpenAI(
+        model_name='gpt-3.5-turbo',
+        temperature=0,
+        )
+        docs_prepped = [Document(page_content=t) for t in docs]
+        chain = load_summarize_chain(llm, chain_type="map_reduce", return_intermediate_steps=True)
+        with self.c.status("[bold green]Summarising documents...", spinner='aesthetic', speed=0.8) as status:
+            summary = chain({"input_documents": docs_prepped}, return_only_outputs=True)
+        return summary
+
     

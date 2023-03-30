@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="aipython",
-    version="0.1.0",
+    version="0.1.1",
     url="https://github.com/elliot-drew-zappi/AIPython",
     author="Elliot Drew",
     author_email="elliot.drew@zappistore.com",
